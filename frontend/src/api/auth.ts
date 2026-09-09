@@ -1,14 +1,27 @@
 import { api, setTokens, clearTokens } from './client'
-import type { TokenPair, User } from '@/types'
+import type { Company, TokenPair, User } from '@/types'
 
-export async function login(username: string, password: string): Promise<TokenPair> {
-  const { data } = await api.post<TokenPair>('/api/auth/token/', { username, password })
+export async function login(
+  username: string,
+  password: string,
+  company: string,
+): Promise<TokenPair> {
+  const { data } = await api.post<TokenPair>('/api/auth/token/', {
+    username,
+    password,
+    company,
+  })
   setTokens(data.access, data.refresh)
   return data
 }
 
 export async function fetchMe(): Promise<User> {
   const { data } = await api.get<User>('/api/accounts/me/')
+  return data
+}
+
+export async function listPublicCompanies(): Promise<Company[]> {
+  const { data } = await api.get<Company[]>('/api/accounts/companies/public/')
   return data
 }
 

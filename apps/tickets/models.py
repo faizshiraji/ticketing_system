@@ -89,6 +89,7 @@ class SLAPolicy(models.Model):
 class Ticket(models.Model):
     class Status(models.TextChoices):
         OPEN = "open", "Open"
+        RECEIVED = "received", "Received"
         IN_PROGRESS = "in_progress", "In progress"
         ON_HOLD = "on_hold", "On hold"
         RESOLVED = "resolved", "Resolved"

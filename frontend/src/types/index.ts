@@ -2,6 +2,7 @@ export type UserRole = 'customer' | 'agent' | 'supervisor' | 'admin'
 
 export type TicketStatus =
   | 'open'
+  | 'received'
   | 'in_progress'
   | 'on_hold'
   | 'resolved'
@@ -88,6 +89,8 @@ export interface TicketAttachment {
   id: number
   file: string
   url?: string
+  download_url?: string
+  name?: string
   uploaded_by: number
   uploaded_at: string
 }
@@ -144,7 +147,11 @@ export interface TokenPair {
 
 export interface DashboardSummary {
   generated_at: string
+  date_from?: string
+  date_to?: string
+  days?: number
   by_status: Record<string, number>
+  status_summary?: Record<string, number>
   by_category: { category__name: string | null; count: number }[]
   avg_resolution_seconds: number | null
   currently_open: number
@@ -159,6 +166,7 @@ export interface DashboardSummary {
 
 export const TICKET_STATUSES: { value: TicketStatus; label: string }[] = [
   { value: 'open', label: 'Open' },
+  { value: 'received', label: 'Received' },
   { value: 'in_progress', label: 'In progress' },
   { value: 'on_hold', label: 'On hold' },
   { value: 'resolved', label: 'Resolved' },
@@ -220,10 +228,23 @@ export interface BreachedTicket {
 
 export interface AnalyticsReport {
   generated_at: string
-  days: number
+  days?: number
+  date_from?: string
+  date_to?: string
   company: number | null
   created_in_period: number
   resolved_in_period: number
+  by_status?: { status: string; count: number }[]
+  by_category?: { category__id: number | null; category__name: string | null; count: number }[]
+  tickets?: {
+    id: number
+    subject: string
+    status: string
+    category: string | null
+    company: string | null
+    created_at: string
+    resolved_at: string | null
+  }[]
   tickets_created_by_day: DayCount[]
   tickets_resolved_by_day: DayCount[]
   open_sla_breached: BreachedTicket[]

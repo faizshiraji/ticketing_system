@@ -1,6 +1,6 @@
 from rest_framework import viewsets
 from rest_framework.generics import ListAPIView, RetrieveAPIView
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 
 from .models import Company, User
 from .permissions import IsAdmin, IsStaffMember, IsSupervisorOrAdmin
@@ -15,6 +15,17 @@ class MeView(RetrieveAPIView):
 
     def get_object(self):
         return self.request.user
+
+
+class PublicCompanyListView(ListAPIView):
+    """Unauthenticated list of active companies for the login dropdown."""
+
+    permission_classes = [AllowAny]
+    serializer_class = CompanySerializer
+    pagination_class = None
+
+    def get_queryset(self):
+        return Company.objects.filter(is_active=True).order_by("name")
 
 
 class CompanyViewSet(viewsets.ModelViewSet):

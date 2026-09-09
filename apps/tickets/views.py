@@ -1,3 +1,7 @@
+from pathlib import Path
+
+from django.http import FileResponse
+from django.utils import timezone
 from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -6,6 +10,7 @@ from rest_framework.response import Response
 from apps.accounts.models import User
 from apps.accounts.permissions import IsStaffMember, IsSupervisorOrAdmin
 from apps.accounts.serializers import UserSerializer
+from apps.notifications.services import notify_ticket_commented, notify_ticket_escalated
 
 from .models import Category, Priority, SupportLayer, Ticket, TicketAttachment, TicketComment, TicketMovement
 from .serializers import (
@@ -17,6 +22,7 @@ from .serializers import (
     TicketAttachmentUploadSerializer,
     TicketCommentSerializer,
     TicketCreateSerializer,
+    TicketCustomerUpdateSerializer,
     TicketDetailSerializer,
     TicketListSerializer,
 )
@@ -100,6 +106,8 @@ class TicketViewSet(viewsets.ModelViewSet):
             return TicketCreateSerializer
         if self.action == "list":
             return TicketListSerializer
+        if self.action in {"update", "partial_update"} and self.request.user.is_customer:
+            return TicketCustomerUpdateSerializer
         return TicketDetailSerializer
 
     def perform_create(self, serializer):
@@ -112,10 +120,18 @@ class TicketViewSet(viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         user = self.request.user
-        if user.is_customer:
-            raise PermissionDenied("Customers cannot modify ticket status or assignment.")
-
         ticket = self.get_object()
+
+        if user.is_customer:
+            if ticket.requester_id != user.id:
+                raise PermissionDenied("You can only modify your own tickets.")
+            if ticket.status != Ticket.Status.OPEN:
+                raise PermissionDenied(
+                    "Tickets can only be modified until they are received by support."
+                )
+            serializer.save()
+            return
+
         previous_agent = ticket.assigned_agent
         previous_layer = ticket.support_layer
 
@@ -130,6 +146,8 @@ class TicketViewSet(viewsets.ModelViewSet):
                 else TicketMovement.MovementType.REASSIGN
             )
             reason = "Assigned to self" if new_agent_id == user.id else "Assignment updated"
+            if new_agent_id is None:
+                reason = "Unassigned"
             record_movement(
                 ticket=ticket,
                 actor=user,
@@ -140,6 +158,26 @@ class TicketViewSet(viewsets.ModelViewSet):
                 from_layer=previous_layer,
                 to_layer=ticket.support_layer,
             )
+
+    @action(detail=True, methods=["post"], permission_classes=[IsStaffMember])
+    def receive(self, request, pk=None):
+        """Acknowledge/receive an open (or reopened) ticket."""
+        ticket = self.get_object()
+        if ticket.status not in {Ticket.Status.OPEN, Ticket.Status.REOPENED}:
+            raise ValidationError(
+                {"detail": "Only open or reopened tickets can be marked as received."}
+            )
+        ticket.status = Ticket.Status.RECEIVED
+        if ticket.first_responded_at is None:
+            ticket.first_responded_at = timezone.now()
+        if ticket.assigned_agent_id is None:
+            ticket.assigned_agent = request.user
+        ticket.save()
+        ticket.refresh_from_db()
+        return Response(
+            TicketDetailSerializer(ticket, context={"request": request}).data,
+            status=status.HTTP_200_OK,
+        )
 
     @action(detail=True, methods=["post"], permission_classes=[IsStaffMember])
     def escalate(self, request, pk=None):
@@ -158,6 +196,7 @@ class TicketViewSet(viewsets.ModelViewSet):
             raise ValidationError({"detail": str(exc)}) from exc
 
         ticket.refresh_from_db()
+        notify_ticket_escalated(ticket, request.user, ser.validated_data["reason"])
         return Response(
             TicketDetailSerializer(ticket, context={"request": request}).data,
             status=status.HTTP_200_OK,
@@ -169,6 +208,10 @@ class TicketViewSet(viewsets.ModelViewSet):
         user = request.user
         if user.is_customer and ticket.requester_id != user.id:
             raise PermissionDenied("You can only attach files to your own tickets.")
+        if user.is_customer and ticket.status != Ticket.Status.OPEN:
+            raise PermissionDenied(
+                "Attachments can only be added while the ticket is still open."
+            )
 
         ser = TicketAttachmentUploadSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
@@ -181,6 +224,31 @@ class TicketViewSet(viewsets.ModelViewSet):
         return Response(
             TicketAttachmentSerializer(attachment, context={"request": request}).data,
             status=status.HTTP_201_CREATED,
+        )
+
+    @action(
+        detail=True,
+        methods=["get"],
+        url_path=r"attachments/(?P<attachment_id>[0-9]+)/download",
+    )
+    def download_attachment(self, request, pk=None, attachment_id=None):
+        ticket = self.get_object()
+        user = request.user
+        if user.is_customer and ticket.requester_id != user.id:
+            raise PermissionDenied("You can only download attachments on your own tickets.")
+
+        try:
+            attachment = ticket.attachments.get(pk=attachment_id)
+        except TicketAttachment.DoesNotExist as exc:
+            raise ValidationError({"detail": "Attachment not found."}) from exc
+
+        if not attachment.file:
+            raise ValidationError({"detail": "File missing."})
+
+        return FileResponse(
+            attachment.file.open("rb"),
+            as_attachment=True,
+            filename=Path(attachment.file.name).name,
         )
 
 
@@ -214,6 +282,7 @@ class TicketCommentViewSet(viewsets.ModelViewSet):
                 uploaded_by=user,
             )
         comment.refresh_from_db()
+        notify_ticket_commented(ticket, comment)
         out = TicketCommentSerializer(comment, context={"request": request})
         headers = self.get_success_headers(out.data)
         return Response(out.data, status=status.HTTP_201_CREATED, headers=headers)

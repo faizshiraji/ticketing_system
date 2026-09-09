@@ -1,10 +1,14 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { listPublicCompanies } from '@/api/auth'
 import { useAuthStore } from '@/stores/auth'
+import type { Company } from '@/types'
 
 const username = ref('')
 const password = ref('')
+const company = ref('')
+const companies = ref<Company[]>([])
 const error = ref('')
 const loading = ref(false)
 
@@ -12,11 +16,25 @@ const auth = useAuthStore()
 const router = useRouter()
 const route = useRoute()
 
+onMounted(async () => {
+  try {
+    companies.value = await listPublicCompanies()
+    const preferred = companies.value.find((c) => c.short_code.toLowerCase() === 'ccl')
+    company.value = preferred?.short_code || companies.value[0]?.short_code || ''
+  } catch {
+    companies.value = []
+  }
+})
+
 async function onSubmit() {
   error.value = ''
+  if (!company.value) {
+    error.value = 'Select a company.'
+    return
+  }
   loading.value = true
   try {
-    const user = await auth.login(username.value.trim(), password.value)
+    const user = await auth.login(username.value.trim(), password.value, company.value)
     const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : null
     if (redirect) {
       await router.replace(redirect)
@@ -24,7 +42,7 @@ async function onSubmit() {
     }
     await router.replace(auth.homePathFor(user.role))
   } catch {
-    error.value = 'Invalid username or password.'
+    error.value = 'Invalid credentials or company selection.'
   } finally {
     loading.value = false
   }
@@ -35,7 +53,7 @@ async function onSubmit() {
   <div class="login-page">
     <form class="card login-card" @submit.prevent="onSubmit">
       <div class="brand">
-        <span class="mark">CCL</span>
+        <span class="mark">{{ company ? company.toUpperCase() : 'CCL' }}</span>
         <div>
           <h1>Support Desk</h1>
           <p>Sign in to raise or manage ERP support tickets.</p>
@@ -43,6 +61,16 @@ async function onSubmit() {
       </div>
 
       <div v-if="error" class="error-banner">{{ error }}</div>
+
+      <div class="field">
+        <label for="company">Company</label>
+        <select id="company" v-model="company" required>
+          <option disabled value="">Select company</option>
+          <option v-for="c in companies" :key="c.id" :value="c.short_code">
+            {{ c.name }} ({{ c.short_code.toUpperCase() }})
+          </option>
+        </select>
+      </div>
 
       <div class="field">
         <label for="username">Username</label>
@@ -59,12 +87,13 @@ async function onSubmit() {
         />
       </div>
 
-      <button class="btn" type="submit" :disabled="loading">
+      <button class="btn" type="submit" :disabled="loading || !company">
         {{ loading ? 'Signing in…' : 'Sign in' }}
       </button>
 
       <p class="hint muted">
-        Demo: <code>ccl.user</code> / <code>agent1</code> — password <code>Test@123</code>
+        Demo: company <code>CCL</code>, user <code>ccl.user</code> / <code>agent1</code> —
+        password <code>Test@123</code>
       </p>
     </form>
   </div>

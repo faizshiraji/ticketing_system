@@ -23,10 +23,10 @@ export const useAuthStore = defineStore('auth', () => {
     return '/agent/queue'
   }
 
-  async function login(username: string, password: string): Promise<User> {
+  async function login(username: string, password: string, company: string): Promise<User> {
     loading.value = true
     try {
-      await authApi.login(username, password)
+      await authApi.login(username, password, company)
       user.value = await authApi.fetchMe()
       return user.value
     } finally {

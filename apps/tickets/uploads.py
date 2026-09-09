@@ -1,4 +1,4 @@
-"""Validation helpers for ticket/comment image uploads."""
+"""Validation helpers for ticket/comment file uploads."""
 
 from pathlib import Path
 
@@ -7,13 +7,23 @@ from rest_framework.exceptions import ValidationError
 
 
 ALLOWED_EXTENSIONS = getattr(
-    settings, "TICKET_IMAGE_EXTENSIONS", {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+    settings,
+    "TICKET_ATTACHMENT_EXTENSIONS",
+    getattr(settings, "TICKET_IMAGE_EXTENSIONS", {".jpg", ".jpeg", ".png", ".gif", ".webp"}),
 )
-MAX_BYTES = getattr(settings, "TICKET_IMAGE_MAX_BYTES", 5 * 1024 * 1024)
-MAX_FILES = getattr(settings, "TICKET_IMAGE_MAX_FILES", 5)
+MAX_BYTES = getattr(
+    settings,
+    "TICKET_ATTACHMENT_MAX_BYTES",
+    getattr(settings, "TICKET_IMAGE_MAX_BYTES", 10 * 1024 * 1024),
+)
+MAX_FILES = getattr(
+    settings,
+    "TICKET_ATTACHMENT_MAX_FILES",
+    getattr(settings, "TICKET_IMAGE_MAX_FILES", 5),
+)
 
 
-def validate_image_file(uploaded_file):
+def validate_attachment_file(uploaded_file):
     name = getattr(uploaded_file, "name", "") or ""
     ext = Path(name).suffix.lower()
     if ext not in ALLOWED_EXTENSIONS:
@@ -22,18 +32,21 @@ def validate_image_file(uploaded_file):
         )
     size = getattr(uploaded_file, "size", None)
     if size is not None and size > MAX_BYTES:
-        raise ValidationError(f"Image exceeds max size of {MAX_BYTES // (1024 * 1024)} MB.")
+        raise ValidationError(f"File exceeds max size of {MAX_BYTES // (1024 * 1024)} MB.")
     return uploaded_file
 
 
+# Back-compat alias
+validate_image_file = validate_attachment_file
+
+
 def collect_upload_files(request):
-    """Pull image files from multipart request (file, files, files[])."""
+    """Pull attachment files from multipart request (file, files, files[])."""
     files = []
     if request.FILES.get("file"):
         files.append(request.FILES["file"])
     files.extend(request.FILES.getlist("files"))
     files.extend(request.FILES.getlist("files[]"))
-    # de-dupe by identity while preserving order
     seen = set()
     unique = []
     for f in files:
@@ -42,7 +55,7 @@ def collect_upload_files(request):
             seen.add(key)
             unique.append(f)
     if len(unique) > MAX_FILES:
-        raise ValidationError(f"At most {MAX_FILES} images allowed.")
+        raise ValidationError(f"At most {MAX_FILES} files allowed.")
     for f in unique:
-        validate_image_file(f)
+        validate_attachment_file(f)
     return unique

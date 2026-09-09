@@ -18,14 +18,9 @@ COMPANIES = [
 ]
 
 CATEGORIES = [
-    "ERP Login and Access",
-    "ERP Transactions and Posting",
-    "ERP Master Data and Configuration",
-    "ERP Reports and Dashboards",
-    "ERP Mobile App Login",
-    "ERP Mobile App Sync and Offline",
-    "ERP Mobile App Crashes and Performance",
-    "General ERP Support",
+    "ERP Web Support",
+    "ERP Mobile Support",
+    "Others",
 ]
 
 # rank: lower = higher urgency
@@ -37,9 +32,16 @@ PRIORITIES = [
 ]
 
 SUPPORT_LAYERS = [
-    {"name": "L1 Frontline", "level": 1, "description": "First-line ERP and mobile-app support"},
-    {"name": "L2 Advanced", "level": 2, "description": "Complex configuration and posting issues"},
-    {"name": "L3 Specialist", "level": 3, "description": "Escalations requiring senior specialists"},
+    {
+        "name": "Dev Team",
+        "level": 1,
+        "description": "All Developers",
+    },
+    {
+        "name": "QA / BA / Support Team",
+        "level": 2,
+        "description": "All QA, BA, and Support Team members",
+    },
 ]
 
 # Priority-wide SLA defaults (minutes)
@@ -71,8 +73,8 @@ USERS = [
 LAYER_MEMBERSHIP = {
     "agent1": [1],
     "agent2": [2],
-    "supervisor": [3],
-    "admin": [3],
+    "supervisor": [1, 2],
+    "admin": [1, 2],
 }
 
 
@@ -107,10 +109,38 @@ class Command(BaseCommand):
         return companies
 
     def _seed_categories(self):
+        wanted = set(CATEGORIES)
         for name in CATEGORIES:
-            _, created = Category.objects.get_or_create(name=name, defaults={"is_active": True})
-            verb = "Created" if created else "Exists"
-            self.stdout.write(f"{verb} category: {name}")
+            cat, created = Category.objects.update_or_create(
+                name=name, defaults={"is_active": True}
+            )
+            verb = "Created" if created else "Updated"
+            self.stdout.write(f"{verb} category: {cat.name}")
+        # Deactivate legacy categories not in the required set
+        deactivated = Category.objects.exclude(name__in=wanted).filter(is_active=True).update(
+            is_active=False
+        )
+        if deactivated:
+            self.stdout.write(f"Deactivated {deactivated} legacy categor(ies)")
+
+    def _seed_support_layers(self):
+        layers = {}
+        wanted_levels = {data["level"] for data in SUPPORT_LAYERS}
+        for data in SUPPORT_LAYERS:
+            layer, created = SupportLayer.objects.update_or_create(
+                level=data["level"],
+                defaults={
+                    "name": data["name"],
+                    "description": data["description"],
+                    "is_active": True,
+                },
+            )
+            layers[layer.level] = layer
+            verb = "Created" if created else "Updated"
+            self.stdout.write(f"{verb} support layer: {layer}")
+        # Deactivate layers outside the new Dev / QA-BA-Support set
+        SupportLayer.objects.exclude(level__in=wanted_levels).update(is_active=False)
+        return layers
 
     def _seed_priorities(self):
         priorities = {}
@@ -126,22 +156,6 @@ class Command(BaseCommand):
             verb = "Created" if created else "Exists"
             self.stdout.write(f"{verb} priority: {priority.name}")
         return priorities
-
-    def _seed_support_layers(self):
-        layers = {}
-        for data in SUPPORT_LAYERS:
-            layer, created = SupportLayer.objects.update_or_create(
-                level=data["level"],
-                defaults={
-                    "name": data["name"],
-                    "description": data["description"],
-                    "is_active": True,
-                },
-            )
-            layers[layer.level] = layer
-            verb = "Created" if created else "Updated"
-            self.stdout.write(f"{verb} support layer: {layer}")
-        return layers
 
     def _seed_sla_policies(self, priorities):
         for name, (first_response, resolution) in SLA_BY_PRIORITY.items():

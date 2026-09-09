@@ -6,9 +6,16 @@ import CommentThread from '@/components/CommentThread.vue'
 import TicketStatusBadge from '@/components/TicketStatusBadge.vue'
 import AttachmentGallery from '@/components/AttachmentGallery.vue'
 import { listStaffAgents } from '@/api/accounts'
-import { createComment, escalateTicket, getTicket, updateTicket } from '@/api/tickets'
+import {
+  createComment,
+  escalateTicket,
+  getTicket,
+  listSupportLayers,
+  receiveTicket,
+  updateTicket,
+} from '@/api/tickets'
 import { useAuthStore } from '@/stores/auth'
-import type { StaffAgent, TicketDetail, TicketStatus } from '@/types'
+import type { StaffAgent, SupportLayer, TicketDetail, TicketStatus } from '@/types'
 import { MOVEMENT_LABELS, TICKET_STATUSES, displayName } from '@/types'
 
 const route = useRoute()
@@ -18,12 +25,16 @@ const { user } = storeToRefs(auth)
 
 const ticket = ref<TicketDetail | null>(null)
 const agents = ref<StaffAgent[]>([])
+const layers = ref<SupportLayer[]>([])
 const loading = ref(true)
 const saving = ref(false)
 const submitting = ref(false)
 const escalating = ref(false)
 const error = ref('')
 const status = ref<TicketStatus>('open')
+
+const assignAgentId = ref<number | ''>('')
+const assignLayerId = ref<number | ''>('')
 
 const escalateMode = ref<'next' | 'agent'>('next')
 const escalateReason = ref('')
@@ -37,6 +48,8 @@ async function load() {
   try {
     ticket.value = await getTicket(ticketId.value)
     status.value = ticket.value.status
+    assignAgentId.value = ticket.value.assigned_agent ?? ''
+    assignLayerId.value = ticket.value.support_layer?.id ?? ''
   } catch {
     error.value = 'Ticket not found or you do not have access.'
     ticket.value = null
@@ -58,29 +71,44 @@ async function saveStatus() {
   }
 }
 
-async function assignToMe() {
-  if (!user.value) return
+async function receive() {
   saving.value = true
   error.value = ''
   try {
-    ticket.value = await updateTicket(ticketId.value, { assigned_agent: user.value.id })
+    ticket.value = await receiveTicket(ticketId.value)
+    status.value = ticket.value.status
+    assignAgentId.value = ticket.value.assigned_agent ?? ''
   } catch {
-    error.value = 'Could not assign ticket.'
+    error.value = 'Could not mark ticket as received.'
   } finally {
     saving.value = false
   }
 }
 
-async function unassign() {
+async function saveAssignment() {
   saving.value = true
   error.value = ''
   try {
-    ticket.value = await updateTicket(ticketId.value, { assigned_agent: null })
+    ticket.value = await updateTicket(ticketId.value, {
+      assigned_agent: assignAgentId.value === '' ? null : Number(assignAgentId.value),
+      support_layer_id: assignLayerId.value === '' ? null : Number(assignLayerId.value),
+    })
   } catch {
-    error.value = 'Could not unassign ticket.'
+    error.value = 'Could not update assignment.'
   } finally {
     saving.value = false
   }
+}
+
+async function assignToMe() {
+  if (!user.value) return
+  assignAgentId.value = user.value.id
+  await saveAssignment()
+}
+
+async function unassign() {
+  assignAgentId.value = ''
+  await saveAssignment()
 }
 
 async function onEscalate() {
@@ -130,7 +158,17 @@ async function onComment(payload: { body: string; isInternal: boolean; files: Fi
 
 function formatDate(iso: string | null) {
   if (!iso) return '—'
-  return new Date(iso).toLocaleString()
+  return new Date(iso).toLocaleString('en-GB', { timeZone: 'Asia/Dhaka' })
+}
+
+function formatDateOnly(iso: string | null) {
+  if (!iso) return '—'
+  return new Date(iso).toLocaleDateString('en-GB', { timeZone: 'Asia/Dhaka' })
+}
+
+function formatTimeOnly(iso: string | null) {
+  if (!iso) return '—'
+  return new Date(iso).toLocaleTimeString('en-GB', { timeZone: 'Asia/Dhaka' })
 }
 
 function personLabel(u: { first_name: string; last_name: string; username: string } | null) {
@@ -138,14 +176,19 @@ function personLabel(u: { first_name: string; last_name: string; username: strin
 }
 
 function layerLabel(layer: { name: string; level: number } | null) {
-  return layer ? `L${layer.level} ${layer.name}` : '—'
+  return layer ? layer.name : '—'
 }
+
+const canReceive = computed(
+  () => ticket.value?.status === 'open' || ticket.value?.status === 'reopened',
+)
 
 onMounted(async () => {
   try {
     agents.value = await listStaffAgents()
+    layers.value = await listSupportLayers()
   } catch {
-    /* escalate agent picker optional until load works */
+    /* optional until load works */
   }
   await load()
 })
@@ -186,11 +229,34 @@ onMounted(async () => {
             {{ saving ? 'Saving…' : 'Update status' }}
           </button>
           <button
+            v-if="canReceive"
             class="btn btn-secondary"
             type="button"
-            :disabled="saving || ticket.assigned_agent === user?.id"
-            @click="assignToMe"
+            :disabled="saving"
+            @click="receive"
           >
+            Receive ticket
+          </button>
+        </div>
+        <div class="panel actions" style="border-top: 1px solid var(--border); margin-top: 0.75rem; padding-top: 0.75rem">
+          <div class="field" style="margin: 0; min-width: 200px">
+            <label for="assign-to">Assign To</label>
+            <select id="assign-to" v-model="assignAgentId">
+              <option value="">Unassigned</option>
+              <option v-for="a in agents" :key="a.id" :value="a.id">{{ displayName(a) }}</option>
+            </select>
+          </div>
+          <div class="field" style="margin: 0; min-width: 220px">
+            <label for="support-layer">Support layer / segment</label>
+            <select id="support-layer" v-model="assignLayerId">
+              <option value="">Select layer</option>
+              <option v-for="l in layers" :key="l.id" :value="l.id">{{ l.name }}</option>
+            </select>
+          </div>
+          <button class="btn" type="button" :disabled="saving" @click="saveAssignment">
+            Save assignment
+          </button>
+          <button class="btn btn-secondary" type="button" :disabled="saving" @click="assignToMe">
             Assign to me
           </button>
           <button
@@ -202,10 +268,6 @@ onMounted(async () => {
           >
             Unassign
           </button>
-          <span class="muted assign-hint">
-            Layer: {{ layerLabel(ticket.support_layer) }} · Agent #
-            {{ ticket.assigned_agent ?? 'none' }}
-          </span>
         </div>
       </div>
 
@@ -290,6 +352,14 @@ onMounted(async () => {
           <div>
             <dt>Resolution due</dt>
             <dd>{{ formatDate(ticket.resolution_due_at) }}</dd>
+          </div>
+          <div>
+            <dt>Resolution date</dt>
+            <dd>{{ formatDateOnly(ticket.resolved_at) }}</dd>
+          </div>
+          <div>
+            <dt>Resolution time</dt>
+            <dd>{{ formatTimeOnly(ticket.resolved_at) }}</dd>
           </div>
         </dl>
 

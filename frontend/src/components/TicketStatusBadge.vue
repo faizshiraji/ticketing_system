@@ -42,6 +42,11 @@ const label = TICKET_STATUSES.find((s) => s.value === props.status)?.label ?? pr
   color: var(--info);
 }
 
+.badge[data-status='received'] {
+  background: #e8f5e9;
+  color: #2e7d32;
+}
+
 .badge[data-status='in_progress'] {
   background: var(--accent-soft);
   color: var(--accent);

@@ -2,14 +2,28 @@
 import { onMounted, ref } from 'vue'
 import { fetchDashboardSummary } from '@/api/analytics'
 import type { DashboardSummary } from '@/types'
-import { TICKET_STATUSES } from '@/types'
 
 const summary = ref<DashboardSummary | null>(null)
 const loading = ref(true)
 const error = ref('')
 
-function statusLabel(key: string) {
-  return TICKET_STATUSES.find((s) => s.value === key)?.label ?? key
+const dateFrom = ref('')
+const dateTo = ref('')
+
+const STATUS_CARDS = [
+  { key: 'open', label: 'Open' },
+  { key: 'in_progress', label: 'In Progress' },
+  { key: 'resolved', label: 'Resolved' },
+  { key: 'closed', label: 'Closed' },
+  { key: 'reopened', label: 'Reopened' },
+] as const
+
+function defaultRange() {
+  const to = new Date()
+  const from = new Date()
+  from.setDate(from.getDate() - 30)
+  dateTo.value = to.toISOString().slice(0, 10)
+  dateFrom.value = from.toISOString().slice(0, 10)
 }
 
 function formatDuration(seconds: number | null) {
@@ -24,14 +38,28 @@ function agentName(row: DashboardSummary['agent_workload'][number]) {
   return full || `Agent #${row.assigned_agent__id}`
 }
 
-onMounted(async () => {
+function cardCount(key: string) {
+  return summary.value?.status_summary?.[key] ?? summary.value?.by_status?.[key] ?? 0
+}
+
+async function load() {
+  loading.value = true
+  error.value = ''
   try {
-    summary.value = await fetchDashboardSummary()
+    summary.value = await fetchDashboardSummary({
+      date_from: dateFrom.value || undefined,
+      date_to: dateTo.value || undefined,
+    })
   } catch {
     error.value = 'Could not load dashboard summary.'
   } finally {
     loading.value = false
   }
+}
+
+onMounted(() => {
+  defaultRange()
+  load()
 })
 </script>
 
@@ -40,9 +68,21 @@ onMounted(async () => {
     <div class="page-header">
       <div>
         <h1>Dashboard</h1>
-        <p>Open workload, SLA breaches, and resolution trends.</p>
+        <p>Status summary, SLA breaches, and workload for the selected date range.</p>
       </div>
       <RouterLink class="btn btn-secondary" to="/agent/queue">Back to queue</RouterLink>
+    </div>
+
+    <div class="filters card">
+      <div class="field">
+        <label for="date-from">From date</label>
+        <input id="date-from" v-model="dateFrom" type="date" />
+      </div>
+      <div class="field">
+        <label for="date-to">To date</label>
+        <input id="date-to" v-model="dateTo" type="date" />
+      </div>
+      <button class="btn" type="button" @click="load">Apply</button>
     </div>
 
     <div v-if="error" class="error-banner">{{ error }}</div>
@@ -51,12 +91,22 @@ onMounted(async () => {
     <template v-else-if="summary">
       <p class="muted" style="margin-bottom: 1rem">
         Generated {{ new Date(summary.generated_at).toLocaleString() }}
+        <template v-if="summary.date_from && summary.date_to">
+          · {{ summary.date_from }} → {{ summary.date_to }}
+        </template>
       </p>
+
+      <div class="stat-grid" style="margin-bottom: 1rem">
+        <div v-for="card in STATUS_CARDS" :key="card.key" class="card stat">
+          <div class="value">{{ cardCount(card.key) }}</div>
+          <div class="label">{{ card.label }}</div>
+        </div>
+      </div>
 
       <div class="stat-grid" style="margin-bottom: 1rem">
         <div class="card stat">
           <div class="value">{{ summary.currently_open }}</div>
-          <div class="label">Currently open</div>
+          <div class="label">Currently open (all active)</div>
         </div>
         <div class="card stat">
           <div class="value" :class="{ danger: summary.currently_sla_breached > 0 }">
@@ -72,17 +122,6 @@ onMounted(async () => {
 
       <div class="grid-2">
         <div class="card panel">
-          <h2>By status</h2>
-          <ul class="list">
-            <li v-for="(count, status) in summary.by_status" :key="status">
-              <span>{{ statusLabel(String(status)) }}</span>
-              <strong>{{ count }}</strong>
-            </li>
-            <li v-if="!Object.keys(summary.by_status).length" class="muted">No data</li>
-          </ul>
-        </div>
-
-        <div class="card panel">
           <h2>By category</h2>
           <ul class="list">
             <li v-for="row in summary.by_category" :key="row.category__name ?? 'none'">
@@ -93,7 +132,7 @@ onMounted(async () => {
           </ul>
         </div>
 
-        <div class="card panel" style="grid-column: 1 / -1">
+        <div class="card panel">
           <h2>Agent workload (open)</h2>
           <ul class="list">
             <li v-for="row in summary.agent_workload" :key="row.assigned_agent__id">
@@ -112,6 +151,20 @@ onMounted(async () => {
 h2 {
   font-size: 1rem;
   margin-bottom: 0.75rem;
+}
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: flex-end;
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
+.filters .field {
+  margin: 0;
+  min-width: 160px;
 }
 
 .grid-2 {

@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 
+const ALLOWED_EXT = /\.(jpe?g|png|gif|webp|pdf|xlsx?)$/i
+const MAX_BYTES = 10 * 1024 * 1024
+
 const props = withDefaults(
   defineProps<{
     modelValue?: File[]
@@ -10,7 +13,7 @@ const props = withDefaults(
   {
     modelValue: () => [],
     maxFiles: 5,
-    label: 'Images',
+    label: 'Attachments',
   },
 )
 
@@ -26,13 +29,18 @@ const files = computed({
   set: (value: File[]) => emit('update:modelValue', value),
 })
 
-const previews = ref<{ name: string; url: string }[]>([])
+const previews = ref<{ name: string; url: string; isImage: boolean }[]>([])
 
 watch(
   () => props.modelValue,
   (list) => {
-    for (const p of previews.value) URL.revokeObjectURL(p.url)
-    previews.value = list.map((f) => ({ name: f.name, url: URL.createObjectURL(f) }))
+    for (const p of previews.value) {
+      if (p.isImage) URL.revokeObjectURL(p.url)
+    }
+    previews.value = list.map((f) => {
+      const isImage = f.type.startsWith('image/')
+      return { name: f.name, url: isImage ? URL.createObjectURL(f) : '', isImage }
+    })
   },
   { immediate: true, deep: true },
 )
@@ -43,16 +51,16 @@ function onPick(event: Event) {
   const picked = Array.from(input.files || [])
   const next = [...files.value]
   for (const file of picked) {
-    if (!file.type.startsWith('image/')) {
-      error.value = 'Only image files are allowed (jpg, png, gif, webp).'
+    if (!ALLOWED_EXT.test(file.name)) {
+      error.value = 'Allowed: jpg, png, gif, webp, pdf, xls, xlsx.'
       continue
     }
-    if (file.size > 5 * 1024 * 1024) {
-      error.value = 'Each image must be 5 MB or smaller.'
+    if (file.size > MAX_BYTES) {
+      error.value = 'Each file must be 10 MB or smaller.'
       continue
     }
     if (next.length >= props.maxFiles) {
-      error.value = `At most ${props.maxFiles} images.`
+      error.value = `At most ${props.maxFiles} files.`
       break
     }
     next.push(file)
@@ -74,15 +82,18 @@ function removeAt(index: number) {
     <input
       :key="inputKey"
       type="file"
-      accept="image/jpeg,image/png,image/gif,image/webp"
+      accept=".jpg,.jpeg,.png,.gif,.webp,.pdf,.xls,.xlsx,image/*,application/pdf,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
       multiple
       @change="onPick"
     />
-    <p class="hint muted">Up to {{ maxFiles }} images, 5 MB each (jpg, png, gif, webp).</p>
+    <p class="hint muted">
+      Up to {{ maxFiles }} files, 10 MB each (images, PDF, Excel).
+    </p>
     <p v-if="error" class="err">{{ error }}</p>
     <div v-if="previews.length" class="thumbs">
-      <div v-for="(p, i) in previews" :key="p.url" class="thumb">
-        <img :src="p.url" :alt="p.name" />
+      <div v-for="(p, i) in previews" :key="p.name + i" class="thumb">
+        <img v-if="p.isImage" :src="p.url" :alt="p.name" />
+        <div v-else class="file-chip">{{ p.name }}</div>
         <button type="button" class="btn btn-ghost" @click="removeAt(i)">Remove</button>
       </div>
     </div>
@@ -115,7 +126,7 @@ function removeAt(index: number) {
   margin-top: 0.75rem;
 }
 .thumb {
-  width: 96px;
+  width: 120px;
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
@@ -127,6 +138,15 @@ function removeAt(index: number) {
   border-radius: 8px;
   border: 1px solid var(--border);
   background: #fff;
+}
+.file-chip {
+  font-size: 0.75rem;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  word-break: break-all;
+  min-height: 96px;
 }
 .thumb .btn {
   padding: 0.2rem 0.4rem;

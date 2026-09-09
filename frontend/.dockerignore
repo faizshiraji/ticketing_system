@@ -1,0 +1,7 @@
+dist
+.git
+.env
+*.md
+.DS_Store
+.dockerignore
+Dockerfile

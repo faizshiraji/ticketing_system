@@ -58,16 +58,26 @@ class SupportLayerBriefSerializer(serializers.ModelSerializer):
 class TicketAttachmentSerializer(serializers.ModelSerializer):
     file = serializers.SerializerMethodField()
     url = serializers.SerializerMethodField()
+    download_url = serializers.SerializerMethodField()
+    name = serializers.SerializerMethodField()
 
     class Meta:
         model = TicketAttachment
-        fields = ["id", "file", "url", "uploaded_by", "uploaded_at"]
+        fields = ["id", "file", "url", "download_url", "name", "uploaded_by", "uploaded_at"]
         read_only_fields = ["uploaded_by", "uploaded_at"]
 
     def get_file(self, obj):
-        return self.get_url(obj)
+        return self.get_download_url(obj)
+
+    def get_name(self, obj):
+        if not obj.file:
+            return None
+        from pathlib import Path
+
+        return Path(obj.file.name).name
 
     def get_url(self, obj):
+        """Direct media URL (useful for image preview when DEBUG serves /media/)."""
         request = self.context.get("request")
         if not obj.file:
             return None
@@ -76,14 +86,31 @@ class TicketAttachmentSerializer(serializers.ModelSerializer):
             return request.build_absolute_uri(url)
         return url
 
+    def get_download_url(self, obj):
+        request = self.context.get("request")
+        if not obj.file or not obj.ticket_id:
+            return None
+        path = f"/api/tickets/{obj.ticket_id}/attachments/{obj.id}/download/"
+        if request is not None:
+            return request.build_absolute_uri(path)
+        return path
+
 
 class TicketAttachmentUploadSerializer(serializers.Serializer):
     file = serializers.FileField()
 
     def validate_file(self, value):
-        from .uploads import validate_image_file
+        from .uploads import validate_attachment_file
 
-        return validate_image_file(value)
+        return validate_attachment_file(value)
+
+
+class TicketCustomerUpdateSerializer(serializers.ModelSerializer):
+    """Customers may edit these fields only while the ticket is still open."""
+
+    class Meta:
+        model = Ticket
+        fields = ["subject", "description", "category", "priority"]
 
 
 class TicketCommentSerializer(serializers.ModelSerializer):
@@ -164,6 +191,21 @@ class TicketDetailSerializer(TicketListSerializer):
     attachments = serializers.SerializerMethodField()
     activity_log = TicketActivityLogSerializer(many=True, read_only=True)
     movements = TicketMovementSerializer(many=True, read_only=True)
+    assigned_agent = serializers.PrimaryKeyRelatedField(
+        queryset=User.objects.filter(
+            role__in=[User.Role.AGENT, User.Role.SUPERVISOR, User.Role.ADMIN]
+        ),
+        allow_null=True,
+        required=False,
+    )
+    support_layer = SupportLayerBriefSerializer(read_only=True)
+    support_layer_id = serializers.PrimaryKeyRelatedField(
+        queryset=SupportLayer.objects.filter(is_active=True),
+        source="support_layer",
+        allow_null=True,
+        required=False,
+        write_only=True,
+    )
 
     class Meta(TicketListSerializer.Meta):
         fields = TicketListSerializer.Meta.fields + [
@@ -176,6 +218,7 @@ class TicketDetailSerializer(TicketListSerializer):
             "comments",
             "activity_log",
             "movements",
+            "support_layer_id",
         ]
 
     def get_attachments(self, ticket):

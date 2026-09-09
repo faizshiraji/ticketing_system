@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import { listCompanies } from '@/api/accounts'
 import { fetchReports } from '@/api/analytics'
 import type { AnalyticsReport, Company, DayCount } from '@/types'
+import { TICKET_STATUSES } from '@/types'
 
 const router = useRouter()
 const report = ref<AnalyticsReport | null>(null)
@@ -11,7 +12,8 @@ const companies = ref<Company[]>([])
 const loading = ref(true)
 const error = ref('')
 const companyId = ref<number | ''>('')
-const days = ref(30)
+const dateFrom = ref('')
+const dateTo = ref('')
 
 const maxCreated = computed(() =>
   Math.max(1, ...(report.value?.tickets_created_by_day.map((d) => d.count) ?? [1])),
@@ -20,13 +22,26 @@ const maxResolved = computed(() =>
   Math.max(1, ...(report.value?.tickets_resolved_by_day.map((d) => d.count) ?? [1])),
 )
 
+function defaultRange() {
+  const to = new Date()
+  const from = new Date()
+  from.setDate(from.getDate() - 30)
+  dateTo.value = to.toISOString().slice(0, 10)
+  dateFrom.value = from.toISOString().slice(0, 10)
+}
+
+function statusLabel(key: string) {
+  return TICKET_STATUSES.find((s) => s.value === key)?.label ?? key
+}
+
 async function load() {
   loading.value = true
   error.value = ''
   try {
     report.value = await fetchReports({
       company: companyId.value || undefined,
-      days: days.value,
+      date_from: dateFrom.value || undefined,
+      date_to: dateTo.value || undefined,
     })
   } catch {
     error.value = 'Could not load analytics report.'
@@ -42,7 +57,7 @@ function barHeight(row: DayCount, max: number) {
 
 function formatDate(iso: string | null) {
   if (!iso) return '—'
-  return new Date(iso).toLocaleString()
+  return new Date(iso).toLocaleString('en-GB', { timeZone: 'Asia/Dhaka' })
 }
 
 function openTicket(id: number) {
@@ -50,6 +65,7 @@ function openTicket(id: number) {
 }
 
 onMounted(async () => {
+  defaultRange()
   try {
     companies.value = await listCompanies()
   } catch {
@@ -64,7 +80,7 @@ onMounted(async () => {
     <div class="page-header">
       <div>
         <h1>Analytics reports</h1>
-        <p>Trends, period totals, and open SLA breaches.</p>
+        <p>Status-wise and category-wise summaries for the selected date range.</p>
       </div>
       <RouterLink class="btn btn-secondary" to="/admin">Back to admin</RouterLink>
     </div>
@@ -78,13 +94,12 @@ onMounted(async () => {
         </select>
       </div>
       <div class="field">
-        <label for="days">Days</label>
-        <select id="days" v-model.number="days">
-          <option :value="7">7</option>
-          <option :value="14">14</option>
-          <option :value="30">30</option>
-          <option :value="90">90</option>
-        </select>
+        <label for="date-from">From date</label>
+        <input id="date-from" v-model="dateFrom" type="date" />
+      </div>
+      <div class="field">
+        <label for="date-to">To date</label>
+        <input id="date-to" v-model="dateTo" type="date" />
       </div>
       <button class="btn" type="button" @click="load">Apply</button>
     </div>
@@ -94,7 +109,10 @@ onMounted(async () => {
 
     <template v-else-if="report">
       <p class="muted" style="margin-bottom: 1rem">
-        Generated {{ formatDate(report.generated_at) }} · last {{ report.days }} days
+        Generated {{ formatDate(report.generated_at) }}
+        <template v-if="report.date_from && report.date_to">
+          · {{ report.date_from }} → {{ report.date_to }}
+        </template>
       </p>
 
       <div class="stat-grid" style="margin-bottom: 1rem">
@@ -111,6 +129,32 @@ onMounted(async () => {
             {{ report.open_sla_breached.length }}
           </div>
           <div class="label">Open SLA breached</div>
+        </div>
+      </div>
+
+      <div class="grid-2" style="margin-bottom: 1rem">
+        <div class="card panel">
+          <h2>Status-wise summary</h2>
+          <ul class="list">
+            <li v-for="row in report.by_status || []" :key="row.status">
+              <span>{{ statusLabel(row.status) }}</span>
+              <strong>{{ row.count }}</strong>
+            </li>
+            <li v-if="!(report.by_status || []).length" class="muted">No data</li>
+          </ul>
+        </div>
+        <div class="card panel">
+          <h2>Category-wise summary</h2>
+          <ul class="list">
+            <li
+              v-for="row in report.by_category || []"
+              :key="String(row.category__id ?? row.category__name)"
+            >
+              <span>{{ row.category__name || 'Uncategorized' }}</span>
+              <strong>{{ row.count }}</strong>
+            </li>
+            <li v-if="!(report.by_category || []).length" class="muted">No data</li>
+          </ul>
         </div>
       </div>
 
@@ -145,6 +189,35 @@ onMounted(async () => {
 
       <div class="card table-wrap" style="margin-top: 1rem">
         <div class="panel" style="border-bottom: 1px solid var(--border)">
+          <h2>Ticket detail (period)</h2>
+        </div>
+        <div v-if="!(report.tickets || []).length" class="empty">No tickets in range.</div>
+        <table v-else class="data">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Subject</th>
+              <th>Status</th>
+              <th>Category</th>
+              <th>Created</th>
+              <th>Resolved</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="t in report.tickets" :key="t.id" @click="openTicket(t.id)">
+              <td class="ticket-id">#{{ t.id }}</td>
+              <td>{{ t.subject }}</td>
+              <td>{{ statusLabel(t.status) }}</td>
+              <td>{{ t.category || '—' }}</td>
+              <td class="muted">{{ formatDate(t.created_at) }}</td>
+              <td class="muted">{{ formatDate(t.resolved_at) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="card table-wrap" style="margin-top: 1rem">
+        <div class="panel" style="border-bottom: 1px solid var(--border)">
           <h2>Open SLA-breached tickets</h2>
         </div>
         <div v-if="!report.open_sla_breached.length" class="empty">No open breaches.</div>
@@ -167,7 +240,7 @@ onMounted(async () => {
               <td class="ticket-id">#{{ t.id }}</td>
               <td>{{ t.subject }}</td>
               <td>{{ t.company.short_code }}</td>
-              <td style="text-transform: capitalize">{{ t.status.replace('_', ' ') }}</td>
+              <td>{{ statusLabel(t.status) }}</td>
               <td class="muted">{{ formatDate(t.resolution_due_at) }}</td>
             </tr>
           </tbody>
@@ -181,6 +254,45 @@ onMounted(async () => {
 h2 {
   font-size: 1rem;
   margin-bottom: 0.75rem;
+}
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: flex-end;
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
+.filters .field {
+  margin: 0;
+  min-width: 140px;
+}
+
+.grid-2 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1rem;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.55rem 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.925rem;
+}
+
+.list li:last-child {
+  border-bottom: none;
 }
 
 .charts {

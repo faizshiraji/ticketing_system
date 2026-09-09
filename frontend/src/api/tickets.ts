@@ -51,9 +51,22 @@ export async function createTicket(payload: TicketCreatePayload): Promise<{ id: 
 
 export async function updateTicket(
   id: number,
-  payload: Partial<{ status: TicketStatus; assigned_agent: number | null }>,
+  payload: Partial<{
+    status: TicketStatus
+    assigned_agent: number | null
+    support_layer_id: number | null
+    subject: string
+    description: string
+    category: number
+    priority: number
+  }>,
 ): Promise<TicketDetail> {
   const { data } = await api.patch<TicketDetail>(`/api/tickets/${id}/`, payload)
+  return data
+}
+
+export async function receiveTicket(id: number): Promise<TicketDetail> {
+  const { data } = await api.post<TicketDetail>(`/api/tickets/${id}/receive/`)
   return data
 }
 
